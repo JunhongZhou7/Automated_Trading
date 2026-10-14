@@ -1,5 +1,5 @@
 import {COMBOS,COMBO_NAMES} from './strategies.js';
-const symbols=['AAPL','MSFT','SPY','QQQ'];
+import {SYMBOLS as symbols} from './universe.js';
 const specs={
  trend:{icon:'↗',category:'TREND FOLLOWING + VOLATILITY SIZING',scenario:'持续上涨趋势、突破后延续的行情；可研究日内或较长持仓。当前信号使用1分钟K线。',risk:'横盘时容易假突破、连续止损；跳空可能使亏损超过预算。',entry:'收盘价突破此前N根K线的最高价；当前K线不计入通道。',management:'ATR × 2设定初始止损距离；按单笔风险预算定仓，跌破退出通道或止损时平仓。',defaults:'ATR周期14 · 默认突破20根 / 退出10根 · 不补仓',fields:[['entryLookback','突破窗口',5,100,1],['exitLookback','退出窗口',2,100,1]]},
  vwap:{icon:'≋',category:'INTRADAY REVERSION + LIMITED SCALING',scenario:'高流动性股票或ETF的日内震荡、偏离均价后的反弹。',risk:'单边下跌时均价回归可能失效；IEX成交量只覆盖单一交易所，VWAP不等于全市场VWAP。',entry:'上一根K线明显低于当日VWAP波动带，当前收盘开始回升且仍低于VWAP时入场。',management:'先买目标仓位约50%；价格确认回升后最多加仓一次，不向下补仓。ATR止损、回到VWAP退出，正常日15:55纽约时间尝试平仓，提前收盘日相应提前。',defaults:'ATR周期14 · 默认偏离1.5个成交量加权标准差 · 仅正常交易时段',fields:[['deviation','偏离倍数',0.5,4,0.1],['maxAdds','最多加仓次数',0,1,1]]},

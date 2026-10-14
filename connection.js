@@ -1,8 +1,8 @@
 const $=id=>document.getElementById(id);
 const money=n=>Number(n).toLocaleString('en-US',{style:'currency',currency:'USD'});
 const escape=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-export async function api(path,body){
- const response=await fetch(path,{method:body?'POST':'GET',headers:body?{'Content-Type':'application/json','X-Strategy-Studio':'1'}:undefined,body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(20000)});
+export async function api(path,body,timeout=20000){
+ const response=await fetch(path,{method:body?'POST':'GET',headers:body?{'Content-Type':'application/json','X-Strategy-Studio':'1'}:undefined,body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(timeout)});
  const data=await response.json();if(!response.ok){const error=Error(data.error||'Request failed.');error.status=response.status;throw error;}return data;
 }
 export function setupConnection({onSource,onQuotes,onFailure,maxExposure}){

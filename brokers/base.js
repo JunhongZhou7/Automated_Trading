@@ -3,6 +3,8 @@ export class Broker {
   get capabilities() { return {marketData:false,paperOrders:false,options:false,automatedExecution:false}; }
   async quotes() { throw new Error('Market data not implemented'); }
   async bars() { throw new Error('OHLCV market data not implemented'); }
+  async dailyBars() { throw new Error('Daily market data not implemented'); }
+  async news() { throw new Error('News data not implemented'); }
   async snapshot() { throw new Error('Account access not implemented'); }
   async marketClock() { throw new Error('Market clock not implemented'); }
   async submitOrder() { throw new Error('Order execution not implemented'); }

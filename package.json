@@ -4,5 +4,5 @@
   "private": true,
   "type": "module",
   "engines": { "node": ">=24" },
-  "scripts": { "start": "node --use-env-proxy --env-file-if-exists=.env server.js", "test": "node --test", "check": "node --check app.js && node --check connection.js && node --check engine.js && node --check strategies.js && node --check strategies-ui.js && node --check server.js && node --check broker-service.js && node --check brokers/alpaca.js" }
+  "scripts": { "start": "node --use-env-proxy --env-file-if-exists=.env server.js", "test": "node --test", "check": "node --check app.js && node --check connection.js && node --check engine.js && node --check strategies.js && node --check strategies-ui.js && node --check universe.js && node --check pair-analysis.js && node --check pair-research-ui.js && node --check server.js && node --check broker-service.js && node --check brokers/alpaca.js" }
 }

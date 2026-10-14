@@ -1,5 +1,6 @@
 import {hydrateStrategies,runCombinations,ingestBars,marketSession} from './strategies.js';
-export const SYMBOLS = ['AAPL','MSFT','SPY','QQQ'];
+import {SYMBOLS,INITIAL_PRICES,pairById,hydrateUniverse} from './universe.js';
+export {SYMBOLS} from './universe.js';
 export const DEFAULT_RULES = [
   {threshold:-3,action:'hold',percent:0}, {threshold:-15,action:'buy',percent:10},
   {threshold:-25,action:'buy',percent:25}, {threshold:5,action:'hold',percent:0},
@@ -8,7 +9,7 @@ export const DEFAULT_RULES = [
   {threshold:60,action:'sell',percent:40}, {threshold:100,action:'sell',percent:100}
 ];
 export function createState(seed=42) {
-  return hydrateStrategies({version:1, seed, tick:0, cash:100000, initial:100000, prices:{AAPL:190,MSFT:420,SPY:550,QQQ:480}, history:[], curve:[100000],positions:[],trades:[],events:[],nextId:1,pair:null,strategies:{pairs:false,ladder:false},rules:structuredClone(DEFAULT_RULES),settings:{entryZ:2,exitZ:0.4,stopZ:3.5,maxExposure:50}});
+  return hydrateStrategies(hydrateUniverse({version:1, seed, tick:0, cash:100000, initial:100000, prices:{...INITIAL_PRICES}, history:[], curve:[100000],positions:[],trades:[],events:[],nextId:1,pair:null,strategies:{pairs:false,ladder:false},rules:structuredClone(DEFAULT_RULES),settings:{entryZ:2,exitZ:0.4,stopZ:3.5,maxExposure:50}}));
 }
 function random(s) { s.seed=(Math.imul(s.seed,1664525)+1013904223)>>>0; return s.seed/4294967296; }
 export function mark(s,p) {
@@ -41,9 +42,10 @@ export function order(s,{symbol,type='stock',qty,side='buy',source='Manual',posi
   return p;
 }
 export function closePosition(s,p,source='Manual close') { return order(s,{symbol:p.symbol,type:p.type,qty:Math.abs(p.qty),side:p.qty>0?'sell':'cover',positionId:p.id,source}); }
-export function zScore(s) {
-  const h=s.history.slice(-40);if(h.length<30)return null;
-  const ratios=h.map(p=>Math.log(p.AAPL/p.MSFT)); const mean=ratios.reduce((a,b)=>a+b,0)/ratios.length;
+export function zScore(s,pairId=s.pair?.pairId||s.selectedPair||'AAPL-MSFT') {
+  const pair=pairById(pairId);if(!pair)return null;
+  const h=s.history.slice(-40).filter(p=>p[pair.a]>0&&p[pair.b]>0);if(h.length<30)return null;
+  const ratios=h.map(p=>Math.log(p[pair.a]/p[pair.b])); const mean=ratios.reduce((a,b)=>a+b,0)/ratios.length;
   const sd=Math.sqrt(ratios.reduce((a,b)=>a+(b-mean)**2,0)/ratios.length);
   return sd>0?(ratios.at(-1)-mean)/sd:0;
 }
@@ -52,12 +54,13 @@ function pairStrategy(s) {
   const z=zScore(s);if(z===null)return;
   if(s.pair) {if(Math.abs(z)<=s.settings.exitZ||Math.abs(z)>=s.settings.stopZ)closePair(s,Math.abs(z)>=s.settings.stopZ?'Pairs stop: spread widened':'Pairs exit: spread reverted');return;}
   if(!s.strategies.pairs||Math.abs(z)<s.settings.entryZ)return;
-  if(s.positions.some(p=>p.type==='stock'&&['AAPL','MSFT'].includes(p.symbol)))return;
-  const long=z>0?'MSFT':'AAPL',short=z>0?'AAPL':'MSFT',budget=equity(s)*0.15;
+  const pair=pairById(s.selectedPair||'AAPL-MSFT');
+  if(s.positions.some(p=>p.type==='stock'&&[pair.a,pair.b].includes(p.symbol)))return;
+  const long=z>0?pair.b:pair.a,short=z>0?pair.a:pair.b,budget=equity(s)*0.15;
   const a=Math.floor(budget/s.prices[long]),b=Math.floor(budget/s.prices[short]);if(!a||!b)return;
   // Trial on a copy keeps two-leg orders atomic if cash or exposure checks reject either leg.
   const trial=structuredClone(s),id='pair-'+s.nextId;
-  try {order(trial,{symbol:long,qty:a,source:'Pairs arbitrage',group:id});order(trial,{symbol:short,qty:b,side:'short',source:'Pairs arbitrage',group:id});trial.pair={id};Object.assign(s,trial);event(s,'Pairs entry: long '+long+', short '+short);}
+  try {order(trial,{symbol:long,qty:a,source:'Pairs arbitrage',group:id});order(trial,{symbol:short,qty:b,side:'short',source:'Pairs arbitrage',group:id});trial.pair={id,pairId:pair.id};Object.assign(s,trial);event(s,'Pairs entry: long '+long+', short '+short);}
   catch(e){event(s,'Pairs entry skipped: '+e.message);}
 }
 export function applyRules(s) {
@@ -78,7 +81,7 @@ export function applyRules(s) {
   }
 }
 export function step(s) {
-  hydrateStrategies(s);const opens={...s.prices};
+  hydrateStrategies(hydrateUniverse(s));const opens={...s.prices};
   s.tick++;const market=(random(s)-0.5)*0.006;
   for(const symbol of SYMBOLS) s.prices[symbol]*=Math.exp(market+(random(s)-0.5)*0.008);
   const minute=(s.tick-1)%390,session='demo-'+Math.floor((s.tick-1)/390),timestamp=new Date(Date.parse('2026-01-05T14:30:00Z')+Math.floor((s.tick-1)/390)*86400000+minute*60000).toISOString();
@@ -101,7 +104,7 @@ export function validateMarket(data,now=Date.now()) {
 }
 export function stepMarket(s,data,now=Date.now()) {
   const {prices,minute}=validateMarket(data,now);
-  hydrateStrategies(s);ingestBars(s,data.barData||{error:'未取得OHLCV K线'},now);
+  hydrateStrategies(hydrateUniverse(s));ingestBars(s,data.barData||{error:'未取得OHLCV K线'},now);
   s.prices=prices;
   if(minute<= (s.lastMarketMinute??-1))return false;
   // Do not treat a market overnight gap as a continuous rolling intraday window.

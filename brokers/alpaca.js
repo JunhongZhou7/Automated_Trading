@@ -36,6 +36,23 @@ export class AlpacaBroker extends Broker {
     return {provider:'alpaca',feed:this.feed,timeframe:'1Min',receivedAt:end,bars};
   }
   async marketClock(){const c=await this.request(PAPER_URL,'/v2/clock');return {open:c.is_open,nextOpen:c.next_open,nextClose:c.next_close};}
+  async dailyBars(symbols){
+    const end=new Date(this.now()).toISOString(),start=new Date(this.now()-100*86400000).toISOString();
+    const result=await this.request(DATA_URL,'/v2/stocks/bars?symbols='+encodeURIComponent(symbols.join(','))+'&timeframe=1Day&start='+encodeURIComponent(start)+'&end='+encodeURIComponent(end)+'&limit=1000&adjustment=all&feed='+this.feed);
+    if(result.next_page_token)throw new BrokerError('日K线数据不完整，暂停交易对排名。');
+    return {feed:this.feed,bars:Object.fromEntries(symbols.map(symbol=>[symbol,(result.bars?.[symbol]||[]).map(b=>({timestamp:b.t,close:number(b.c)}))]))};
+  }
+  async news(symbols){
+    const start=new Date(this.now()-7*86400000).toISOString(),articles=new Map();let token=null;
+    for(let page=0;page<3;page++){
+      const result=await this.request(DATA_URL,'/v1beta1/news?symbols='+encodeURIComponent(symbols.join(','))+'&start='+encodeURIComponent(start)+'&sort=desc&limit=50&exclude_content=true'+(token?'&page_token='+encodeURIComponent(token):''));
+      for(const a of result.news||[]){if(!Array.isArray(a.symbols)||!Number.isFinite(Date.parse(a.created_at)))continue;const id=String(a.id??a.url??'');if(!id)continue;
+        articles.set(id,{id,headline:String(a.headline||'').slice(0,500),summary:String(a.summary||'').replace(/<[^>]*>/g,' ').slice(0,2000),symbols:a.symbols.filter(s=>symbols.includes(s)),publishedAt:a.created_at,url:String(a.url||''),source:String(a.source||'Alpaca News')});
+      }
+      token=result.next_page_token;if(!token)break;
+    }
+    return {articles:[...articles.values()],truncated:Boolean(token)};
+  }
   async submitOrder({symbol,qty,side,clientOrderId}){
     const result=await this.request(PAPER_URL,'/v2/orders',{method:'POST',body:{symbol,qty:String(qty),side,type:'market',time_in_force:'day',client_order_id:clientOrderId}});
     return normalizeOrder(result);

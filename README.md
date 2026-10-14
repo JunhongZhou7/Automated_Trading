@@ -21,11 +21,39 @@ The server listens on 127.0.0.1:3000 (`PORT` and `HOST` can override it). There 
 
 ## Strategy assumptions
 
-Pairs trading uses the last 40 AAPL/MSFT log-price ratios with at least 30 observations. It allocates approximately 15% of equity to each leg, enters at an absolute z-score of 2, exits below 0.4, and stops above 3.5. These assets are illustrative, not a validated cointegrated pair. Turning it off blocks new entries but retains exits for open pairs.
+Pairs trading uses the last 40 log-price ratios for the selected pair (AAPL/MSFT by default; PEP/KO is also available) with at least 30 observations. It allocates approximately 15% of equity to each leg, enters at an absolute z-score of 2, exits below 0.4, and stops above 3.5. Both pairs are illustrative candidates, not validated cointegrated relationships. Existing positions retain their opening pair until closed; selection does not rebalance them. Turning it off blocks new entries but retains exits for open pairs.
 
 The profit ladder uses the original entry price as its reference. Default rules: -3% hold; -15% buy 10%; -25% buy 25%; +5% and +15% hold; +25% sell 10%; +35% sell 20%; +45% sell 30%; +60% sell 40%; +100% sell all. Each rule fires once per position; rejected orders may retry later. Buys and sells use the current remaining share count, rounded down. Multiple crossed thresholds execute in listed order. A sale of all remaining shares ends the position. Threshold edits do not reset fired rules.
 
 The ladder manages independent manual long stock positions. It does not resize pairs, options, or positions owned by the three new combinations. All strategies can run concurrently on their respective positions. Large percentage thresholds suit longer holding periods more than typical intraday stock moves. Averaging down increases risk and neither strategy guarantees profits.
+
+## Synthetic prices: what they do and do not establish
+
+Synthetic demo starts from arbitrary constants: AAPL 190, MSFT 420, SPY 550, QQQ 480, PEP 160 and KO 70. It does not download quotes or replay history. With seed 42, each minute applies `price *= exp(commonMarketShock + individualShock)`, where the uniform common log shock is in approximately [-0.003, 0.003] and the individual log shock in [-0.004, 0.004]. High/low ranges and volume are also randomly generated. The synthetic path does not encode real volatility, market microstructure, mean reversion, cointegration, or company fundamentals. It is reproducible for testing mechanics, not evidence of profitability, realistic risk, or suitability of any pair. Adding symbols can change the seeded path between software versions.
+
+## Pair research: real prices + news NLP, manual selection
+
+The new **交易对研究 · 价格 + 新闻NLP** panel compares PEP/KO (PepsiCo/Coca-Cola) and AAPL/MSFT. Click **获取真实数据并分析** to fetch real Alpaca adjusted daily bars and the last seven days of news. It works independently of the current chart mode and never uses synthetic prices or fabricated news. Existing Alpaca paper API credentials need access to both historical data and news. Analysis can be run outside market hours; execution still requires fresh market data during trading hours.
+
+The service aligns up to 60 completed daily observations and requires at least 40. It fits an OLS log-price relationship on all but the last observation, computes the last residual z-score, daily-return correlation, and each leg's five-session price change. The beta is diagnostic only: execution continues to use equal-dollar legs and the existing rolling minute log-ratio signal. The daily analysis is a candidate screen, not the execution signal. No cointegration or out-of-sample validation has been performed. Similar brands alone do not establish a tradable mean-reverting relationship.
+
+The default text analyzer is **local English keyword NLP**, not a language model. It counts explicit positive/negative earnings phrases on single-company articles and flags possible structural-event terms such as mergers, recalls, and fraud. Shared articles are shown but not assigned directional company sentiment. Negation, ambiguity, broad multi-ticker articles, and incomplete news coverage remain limitations. Missing company coverage is unknown; the pair receives no combined score. A missing event keyword does not establish safety.
+
+The optional semantic analyzer sends at most 20 headlines/summaries per pair to OpenAI. To enable it, edit the existing `.env` (do not overwrite your Alpaca keys):
+
+```dotenv
+PAIR_NLP_PROVIDER=semantic
+NLP_API_KEY=your-own-api-key
+NLP_MODEL=gpt-4.1-mini
+```
+
+Restart the server. This uses your own API account and may incur charges. The key stays server-side; `NLP_API_KEY` is a custom application variable, not the platform-reserved `OPENAI_API_KEY`. For cloud use, enter the optional personal secret securely in environment settings and allow `api.openai.com`. Without semantic configuration, keep `PAIR_NLP_PROVIDER=keyword`. Semantic failures do not silently revert to keyword scores. News is treated as untrusted input and model outputs require bounded sentiment values and valid supplied article IDs; this does not make the analysis fact-checked.
+
+Research scores combine return correlation (40%), daily spread deviation capped at |z|=2 (30%), and similarity of text sentiment (30%), with a structural-event penalty. Weak correlation (<0.5), nonpositive OLS beta, extreme daily |z| (>3.5), event flags, large sentiment divergence, or missing text coverage prevent the pair from being labeled a priority research candidate. These gates and weights are unvalidated heuristics; a score is not a probability of profit. You can still choose a pair for observation, but the app never automatically selects or trades from this ranking.
+
+Results include source links, publication times, evidence IDs, limitations and data dates. News pagination is capped at 150 recent articles across symbols and labeled if truncated; lexical inputs include summaries up to 2,000 characters and semantic inputs are further capped. Results are cached for five minutes, expire after fifteen minutes, and are not historical point-in-time backtests. The current server has no persistent research storage.
+
+Use the pair dropdown or a result's selection button to choose a pair manually, then enable pairs trading and start the local research workflow. Selection alone never places an order. Close both legs before changing an active pair. Both synthetic and Alpaca research accounts remember their selections separately. Only one pair can be open at a time. PEP and KO are also available in the watchlist and manual stock order forms. Old browser accounts are migrated without inventing prior PEP/KO history; they need fresh pair samples for warmup.
 
 ## Three entry + position-management combinations
 
