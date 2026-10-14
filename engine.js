@@ -82,3 +82,23 @@ export function step(s) {
   for(const p of [...s.positions])if(p.type!=='stock'&&p.expiry<=s.tick){const amount=mark(s,p)*p.qty*100;s.cash+=amount;s.positions=s.positions.filter(x=>x.id!==p.id);event(s,p.symbol+' '+p.type+' expired; cash settlement $'+amount.toFixed(2));}
   pairStrategy(s);applyRules(s);s.curve.push(equity(s));s.curve=s.curve.slice(-600);return s;
 }
+// Real quotes are sampled once per minute; duplicate polls never accelerate strategy time.
+export function validateMarket(data,now=Date.now()) {
+  if(!data.market?.open)throw Error('Market is closed; strategies are paused.');
+  const prices={},times=[];
+  for(const symbol of SYMBOLS){const q=data.quotes?.find(q=>q.symbol===symbol),time=Date.parse(q?.timestamp);
+    if(!q||!Number.isFinite(q.price)||q.price<=0||!Number.isFinite(time)||now-time>120000||time-now>5000)throw Error('Missing or stale Alpaca quote. Strategies are paused.');
+    prices[symbol]=q.price;times.push(time);
+  }
+  if(Math.max(...times)-Math.min(...times)>60000)throw Error('Quote timestamps are not aligned. Strategies are paused.');
+  return {prices,minute:Math.floor(Math.min(...times)/60000)};
+}
+export function stepMarket(s,data,now=Date.now()) {
+  const {prices,minute}=validateMarket(data,now);
+  s.prices=prices;
+  if(minute<= (s.lastMarketMinute??-1))return false;
+  // Do not treat a market overnight gap as a continuous rolling intraday window.
+  if(s.lastMarketMinute!==undefined&&minute-s.lastMarketMinute>5)s.history=[];
+  s.lastMarketMinute=minute;s.tick++;s.history.push({...prices});s.history=s.history.slice(-400);
+  pairStrategy(s);applyRules(s);s.curve.push(equity(s));s.curve=s.curve.slice(-600);return true;
+}
