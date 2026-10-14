@@ -1,0 +1,7 @@
+{
+  "name": "strategy-studio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "start": "node server.js", "test": "node --test", "check": "node --check app.js && node --check engine.js && node --check server.js" }
+}
