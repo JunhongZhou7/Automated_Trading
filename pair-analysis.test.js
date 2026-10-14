@@ -62,3 +62,9 @@ test('analysis HTTP endpoint serves results without exposing analyzer source or 
  const analysis={provider:'keyword',analyze:async()=>({rows:[],provider:'keyword'})},broker={configured:true};const server=createServer({broker,analysis});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>server.close(resolve)));const base='http://127.0.0.1:'+server.address().port;
  assert.equal((await fetch(base+'/api/pair-analysis')).status,200);assert.equal((await fetch(base+'/pair-analysis.js')).status,404);assert.equal((await fetch(base+'/universe.js')).status,200);assert.equal((await fetch(base+'/pair-research-ui.js')).status,200);
 });
+test('model quota, authentication and model-access errors remain distinct without leaking upstream messages',async()=>{
+ for(const [status,code,expected] of [[429,'insufficient_quota',/额度或计费/],[429,'rate_limit_exceeded',/频率/],[401,'invalid_api_key',/密钥无效/],[404,'model_not_found',/模型不存在/]]){
+  const nlp=new SemanticNlp({key:'test-key',fetchImpl:async()=>new Response(JSON.stringify({error:{code,message:'sensitive upstream content must not be echoed'}}),{status})});
+  await assert.rejects(nlp.analyze([article('PEP','1')],pair),error=>error.status===status&&error.code===code&&expected.test(error.message)&&!error.message.includes('sensitive upstream'));
+ }
+});
