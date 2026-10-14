@@ -16,7 +16,7 @@ export function setupConnection({onSource,onQuotes,onFailure,maxExposure}){
   if(polling)return;polling=true;
   try{const data=await api('/api/quotes');const oldest=Math.max(...data.quotes.map(q=>Math.max(0,(Date.now()-Date.parse(q.timestamp))/1000)));
    $('data-status').textContent='Alpaca '+data.feed.toUpperCase()+' · latest trades '+data.quotes.map(q=>q.symbol+' '+new Date(q.timestamp).toLocaleTimeString()).join(' · ')+' · '+(data.market.open?'Market open':'Market closed')+(oldest>120?' · STALE':'');
-   if(enabled)onQuotes(data);
+   if(enabled){try{data.barData=await api('/api/bars');}catch(e){data.barData={error:e.message};$('data-status').textContent+=' · OHLCV K线不可用：新组合暂停入场';}if(enabled)onQuotes(data);}
   }catch(e){$('data-status').textContent=e.message;if(enabled)onFailure(e.message);}finally{polling=false;}
  }
  async function refreshAccount(){

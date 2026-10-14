@@ -1,12 +1,16 @@
 import {createState,SYMBOLS,step,stepMarket,validateMarket,equity,exposure,mark,order,closePosition,zScore} from './engine.js';
 import {setupConnection} from './connection.js';
+import {hydrateStrategies,ingestBars} from './strategies.js';
+import {setupCombinationsUI} from './strategies-ui.js';
 const $=id=>document.getElementById(id),money=n=>n.toLocaleString('en-US',{style:'currency',currency:'USD'});
 let state=createState(),timer=null;
-let realMode=false,quoteData=null,ready=false,connection;
+let realMode=false,quoteData=null,ready=false,connection,comboUI;
 try{const saved=JSON.parse(localStorage.getItem('strategy-studio-v1'));if(saved?.version===1&&Array.isArray(saved.positions))state=saved;}catch{}
+hydrateStrategies(state);
 const escape=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function persist(){try{localStorage.setItem(realMode?'strategy-studio-alpaca-v1':'strategy-studio-v1',JSON.stringify(state));}catch{$('message').textContent='Browser storage unavailable; this session will not persist.';}}
 function render(){
+  comboUI?.render();
   const value=equity(state),gain=value-state.initial;
   $('equity').textContent=money(value);$('cash').textContent=money(state.cash);$('return').textContent=(gain>=0?'+':'')+(gain/state.initial*100).toFixed(2)+'%';$('return').className=gain>=0?'positive':'negative';$('pnl').textContent=money(gain)+' since simulation start';$('exposure').textContent=(exposure(state)/value*100).toFixed(1)+'%';$('risk-label').textContent=state.settings.maxExposure+'% limit for new orders';
   $('clock').textContent=(realMode?'Alpaca research · samples ':'Simulation · minute ')+state.tick;$('enabled').textContent=Object.values(state.strategies).filter(Boolean).length+' STRATEGIES ENABLED';
@@ -42,8 +46,9 @@ $('order-form').onsubmit=e=>{e.preventDefault();try{if(realMode){if(!quoteData)t
 $('position-rows').onclick=e=>{const button=e.target.closest('[data-close]');if(!button)return;const p=state.positions.find(x=>x.id===Number(button.dataset.close));if(!p)return;try{if(realMode){if(!quoteData)throw Error('Fresh Alpaca data required.');validateMarket(quoteData);}const trial=structuredClone(state);for(const position of [...trial.positions].filter(x=>p.group?x.group===p.group:x.id===p.id))closePosition(trial,position);if(p.group)trial.pair=null;state=trial;state.curve.push(equity(state));render();$('message').textContent='Local position closed.';}catch(err){$('message').textContent=err.message;}};
 connection=setupConnection({
   maxExposure:()=>state.settings.maxExposure,
-  onSource(enabled){pause();persist();realMode=enabled;ready=false;quoteData=null;state=createState();try{const saved=JSON.parse(localStorage.getItem(realMode?'strategy-studio-alpaca-v1':'strategy-studio-v1'));if(saved?.version===1&&Array.isArray(saved.positions))state=saved;}catch{}if(realMode){$('instrument').value='stock';$('side').disabled=false;}$('message').textContent=realMode?'Alpaca prices with LOCAL simulated strategy execution. Use the separate broker panel for Alpaca paper orders.':'';renderRules();render();},
-  onQuotes(data){if(!realMode)return;quoteData=data;for(const q of data.quotes)if(SYMBOLS.includes(q.symbol)&&Number.isFinite(q.price)&&q.price>0)state.prices[q.symbol]=q.price;try{validateMarket(data);ready=true;if(timer)stepMarket(state,data);render();}catch(e){ready=false;$('message').textContent=e.message;render();}},
+  onSource(enabled){pause();persist();realMode=enabled;ready=false;quoteData=null;state=createState();try{const saved=JSON.parse(localStorage.getItem(realMode?'strategy-studio-alpaca-v1':'strategy-studio-v1'));if(saved?.version===1&&Array.isArray(saved.positions))state=saved;}catch{}hydrateStrategies(state);if(realMode){$('instrument').value='stock';$('side').disabled=false;}$('message').textContent=realMode?'Alpaca prices with LOCAL simulated strategy execution. Use the separate broker panel for Alpaca paper orders.':'';renderRules();render();},
+  onQuotes(data){if(!realMode)return;quoteData=data;ingestBars(state,data.barData||{error:'未取得OHLCV K线'});for(const q of data.quotes)if(SYMBOLS.includes(q.symbol)&&Number.isFinite(q.price)&&q.price>0)state.prices[q.symbol]=q.price;try{validateMarket(data);ready=true;if(timer)stepMarket(state,data);render();}catch(e){ready=false;$('message').textContent=e.message;render();}},
   onFailure(message){ready=false;quoteData=null;$('message').textContent=message;render();}
 });
+comboUI=setupCombinationsUI(()=>state,()=>render());
 renderRules();render();

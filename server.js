@@ -5,7 +5,7 @@ import {resolve} from 'node:path';
 import {createBroker} from './brokers/index.js';
 import {PaperService} from './broker-service.js';
 import {SYMBOLS} from './engine.js';
-const files=new Map(['index.html','app.js','engine.js','style.css','connection.js'].map(f=>['/'+f,f]));
+const files=new Map(['index.html','app.js','engine.js','strategies.js','strategies-ui.js','style.css','connection.js'].map(f=>['/'+f,f]));
 const types={html:'text/html',js:'text/javascript',css:'text/css'};
 export function createServer({broker=createBroker(),ordersEnabled=process.env.ALPACA_PAPER_ORDERS==='true'}={}){
  const service=new PaperService(broker);
@@ -19,6 +19,7 @@ export function createServer({broker=createBroker(),ordersEnabled=process.env.AL
     if(req.headers['sec-fetch-site']==='cross-site'||origin&&new URL(origin).host!==host){json(403,{error:'Cross-origin API requests are forbidden.'});return;}
     if(req.method==='GET'&&url.pathname==='/api/config'){json(200,{provider:'alpaca',mode:'paper',configured:broker.configured||false,feed:broker.feed,ordersEnabled,capabilities:broker.capabilities,brokers:[{id:'alpaca',available:true},{id:'ibkr',available:false}]});return;}
     if(req.method==='GET'&&url.pathname==='/api/quotes'){const [data,market]=await Promise.all([broker.quotes(SYMBOLS),broker.marketClock()]);json(200,{...data,market});return;}
+    if(req.method==='GET'&&url.pathname==='/api/bars'){json(200,await broker.bars(SYMBOLS));return;}
     if(req.method==='GET'&&url.pathname==='/api/account'){json(200,await broker.snapshot());return;}
     if(req.method==='POST'&&(url.pathname==='/api/orders'||url.pathname==='/api/orders/cancel')){
      if(!ordersEnabled){json(403,{error:'Set ALPACA_PAPER_ORDERS=true on the server to enable broker paper orders.'});return;}

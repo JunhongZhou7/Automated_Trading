@@ -27,6 +27,14 @@ export class AlpacaBroker extends Broker {
     ]);
     return {provider:'alpaca',mode:'paper',account:{equity:number(a.equity),cash:number(a.cash),buyingPower:number(a.buying_power),lastEquity:number(a.last_equity),status:a.status,blocked:Boolean(a.trading_blocked)},market:{open:clock.is_open,nextOpen:clock.next_open,nextClose:clock.next_close},positions:positions.map(p=>({symbol:p.symbol,qty:number(p.qty),entry:number(p.avg_entry_price),mark:number(p.current_price),marketValue:number(p.market_value),unrealizedPnl:number(p.unrealized_pl)})),orders:orders.map(normalizeOrder)};
   }
+  async bars(symbols){
+    const now=this.now(),start=new Date(now-86400000).toISOString(),end=new Date(now).toISOString();
+    const result=await this.request(DATA_URL,'/v2/stocks/bars?symbols='+encodeURIComponent(symbols.join(','))+'&timeframe=1Min&start='+encodeURIComponent(start)+'&end='+encodeURIComponent(end)+'&limit=10000&adjustment=raw&feed='+this.feed);
+    if(result.next_page_token)throw new BrokerError('Alpaca bar response is incomplete; no strategy entry will use partial data.');
+    const bars={};
+    for(const symbol of symbols){bars[symbol]=(result.bars?.[symbol]||[]).map(b=>({timestamp:b.t,open:number(b.o),high:number(b.h),low:number(b.l),close:number(b.c),volume:number(b.v)})).filter(b=>Number.isFinite(Date.parse(b.timestamp))&&Date.parse(b.timestamp)+60000<=now).sort((a,b)=>Date.parse(a.timestamp)-Date.parse(b.timestamp));}
+    return {provider:'alpaca',feed:this.feed,timeframe:'1Min',receivedAt:end,bars};
+  }
   async marketClock(){const c=await this.request(PAPER_URL,'/v2/clock');return {open:c.is_open,nextOpen:c.next_open,nextClose:c.next_close};}
   async submitOrder({symbol,qty,side,clientOrderId}){
     const result=await this.request(PAPER_URL,'/v2/orders',{method:'POST',body:{symbol,qty:String(qty),side,type:'market',time_in_force:'day',client_order_id:clientOrderId}});

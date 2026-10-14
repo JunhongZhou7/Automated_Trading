@@ -1,3 +1,4 @@
+import {hydrateStrategies,runCombinations,ingestBars,marketSession} from './strategies.js';
 export const SYMBOLS = ['AAPL','MSFT','SPY','QQQ'];
 export const DEFAULT_RULES = [
   {threshold:-3,action:'hold',percent:0}, {threshold:-15,action:'buy',percent:10},
@@ -7,7 +8,7 @@ export const DEFAULT_RULES = [
   {threshold:60,action:'sell',percent:40}, {threshold:100,action:'sell',percent:100}
 ];
 export function createState(seed=42) {
-  return {version:1, seed, tick:0, cash:100000, initial:100000, prices:{AAPL:190,MSFT:420,SPY:550,QQQ:480}, history:[], curve:[100000],positions:[],trades:[],events:[],nextId:1,pair:null,strategies:{pairs:false,ladder:false},rules:structuredClone(DEFAULT_RULES),settings:{entryZ:2,exitZ:0.4,stopZ:3.5,maxExposure:50}};
+  return hydrateStrategies({version:1, seed, tick:0, cash:100000, initial:100000, prices:{AAPL:190,MSFT:420,SPY:550,QQQ:480}, history:[], curve:[100000],positions:[],trades:[],events:[],nextId:1,pair:null,strategies:{pairs:false,ladder:false},rules:structuredClone(DEFAULT_RULES),settings:{entryZ:2,exitZ:0.4,stopZ:3.5,maxExposure:50}});
 }
 function random(s) { s.seed=(Math.imul(s.seed,1664525)+1013904223)>>>0; return s.seed/4294967296; }
 export function mark(s,p) {
@@ -51,6 +52,7 @@ function pairStrategy(s) {
   const z=zScore(s);if(z===null)return;
   if(s.pair) {if(Math.abs(z)<=s.settings.exitZ||Math.abs(z)>=s.settings.stopZ)closePair(s,Math.abs(z)>=s.settings.stopZ?'Pairs stop: spread widened':'Pairs exit: spread reverted');return;}
   if(!s.strategies.pairs||Math.abs(z)<s.settings.entryZ)return;
+  if(s.positions.some(p=>p.type==='stock'&&['AAPL','MSFT'].includes(p.symbol)))return;
   const long=z>0?'MSFT':'AAPL',short=z>0?'AAPL':'MSFT',budget=equity(s)*0.15;
   const a=Math.floor(budget/s.prices[long]),b=Math.floor(budget/s.prices[short]);if(!a||!b)return;
   // Trial on a copy keeps two-leg orders atomic if cash or exposure checks reject either leg.
@@ -62,7 +64,7 @@ export function applyRules(s) {
   if(!s.strategies.ladder)return;
   for(const p of [...s.positions]) {
     // Pair exits own both legs; independent ladder adjustments would break the hedge.
-    if(p.type!=='stock'||p.qty<=0||p.group)continue;
+    if(p.type!=='stock'||p.qty<=0||p.group||p.manager)continue;
     const change=(s.prices[p.symbol]/p.anchor-1)*100;
     for(let i=0;i<s.rules.length;i++) {
       const r=s.rules[i];if(p.fired.includes(i)||!(r.threshold<0?change<=r.threshold:change>=r.threshold))continue;
@@ -76,11 +78,15 @@ export function applyRules(s) {
   }
 }
 export function step(s) {
+  hydrateStrategies(s);const opens={...s.prices};
   s.tick++;const market=(random(s)-0.5)*0.006;
   for(const symbol of SYMBOLS) s.prices[symbol]*=Math.exp(market+(random(s)-0.5)*0.008);
+  const minute=(s.tick-1)%390,session='demo-'+Math.floor((s.tick-1)/390),timestamp=new Date(Date.parse('2026-01-05T14:30:00Z')+Math.floor((s.tick-1)/390)*86400000+minute*60000).toISOString();
+  for(const symbol of SYMBOLS){const close=s.prices[symbol],bar={timestamp,session,minute,open:opens[symbol],high:Math.max(opens[symbol],close)*(1+random(s)*.001),low:Math.min(opens[symbol],close)*(1-random(s)*.001),close,volume:Math.floor(50000+random(s)*500000)};s.bars[symbol]??=[];s.bars[symbol].push(bar);s.bars[symbol]=s.bars[symbol].slice(-1000);}
+  s.barError=null;
   s.history.push({...s.prices});s.history=s.history.slice(-400);
   for(const p of [...s.positions])if(p.type!=='stock'&&p.expiry<=s.tick){const amount=mark(s,p)*p.qty*100;s.cash+=amount;s.positions=s.positions.filter(x=>x.id!==p.id);event(s,p.symbol+' '+p.type+' expired; cash settlement $'+amount.toFixed(2));}
-  pairStrategy(s);applyRules(s);s.curve.push(equity(s));s.curve=s.curve.slice(-600);return s;
+  pairStrategy(s);runCombinations(s,{session,minute,real:false},{equity,exposure,order,closePosition,event});applyRules(s);s.curve.push(equity(s));s.curve=s.curve.slice(-600);return s;
 }
 // Real quotes are sampled once per minute; duplicate polls never accelerate strategy time.
 export function validateMarket(data,now=Date.now()) {
@@ -95,10 +101,14 @@ export function validateMarket(data,now=Date.now()) {
 }
 export function stepMarket(s,data,now=Date.now()) {
   const {prices,minute}=validateMarket(data,now);
+  hydrateStrategies(s);ingestBars(s,data.barData||{error:'未取得OHLCV K线'},now);
   s.prices=prices;
   if(minute<= (s.lastMarketMinute??-1))return false;
   // Do not treat a market overnight gap as a continuous rolling intraday window.
   if(s.lastMarketMinute!==undefined&&minute-s.lastMarketMinute>5)s.history=[];
   s.lastMarketMinute=minute;s.tick++;s.history.push({...prices});s.history=s.history.slice(-400);
-  pairStrategy(s);applyRules(s);s.curve.push(equity(s));s.curve=s.curve.slice(-600);return true;
+  const session=marketSession(now),closeTime=Date.parse(data.market.nextClose);
+  const flattenMinute=Number.isFinite(closeTime)&&marketSession(closeTime).id===session.id?marketSession(closeTime).minute-5:385;
+  const quoteTime=Math.min(...data.quotes.map(q=>Date.parse(q.timestamp)));
+  pairStrategy(s);runCombinations(s,{session:session.id,minute:session.minute,flattenMinute,real:true,now,quoteTime},{equity,exposure,order,closePosition,event});applyRules(s);s.curve.push(equity(s));s.curve=s.curve.slice(-600);return true;
 }
