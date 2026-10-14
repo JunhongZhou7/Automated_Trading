@@ -38,7 +38,7 @@ export class AlpacaBroker extends Broker {
   async marketClock(){const c=await this.request(PAPER_URL,'/v2/clock');return {open:c.is_open,nextOpen:c.next_open,nextClose:c.next_close};}
   async dailyBars(symbols){
     const end=new Date(this.now()).toISOString(),start=new Date(this.now()-100*86400000).toISOString();
-    const result=await this.request(DATA_URL,'/v2/stocks/bars?symbols='+encodeURIComponent(symbols.join(','))+'&timeframe=1Day&start='+encodeURIComponent(start)+'&end='+encodeURIComponent(end)+'&limit=1000&adjustment=all&feed='+this.feed);
+    const result=await this.request(DATA_URL,'/v2/stocks/bars?symbols='+encodeURIComponent(symbols.join(','))+'&timeframe=1Day&start='+encodeURIComponent(start)+'&end='+encodeURIComponent(end)+'&limit=10000&adjustment=all&feed='+this.feed);
     if(result.next_page_token)throw new BrokerError('日K线数据不完整，暂停交易对排名。');
     return {feed:this.feed,bars:Object.fromEntries(symbols.map(symbol=>[symbol,(result.bars?.[symbol]||[]).map(b=>({timestamp:b.t,close:number(b.c)}))]))};
   }

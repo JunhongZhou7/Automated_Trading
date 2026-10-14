@@ -49,7 +49,7 @@ export class SemanticNlp {
   const ids=new Set(selected.map(a=>a.id));
   if(!result||typeof result.eventRisk!=='boolean'||typeof result.reason!=='string'||result.reason.length>1500||!Array.isArray(result.evidenceIds)||result.evidenceIds.some(id=>!ids.has(id)))throw new BrokerError('语义NLP输出缺少有效依据，未用于排名。');
   for(const symbol of [pair.a,pair.b]){const asset=result.assets?.[symbol];if(!asset||!Number.isFinite(asset.sentiment)||asset.sentiment< -1||asset.sentiment>1)throw new BrokerError('语义NLP情绪分数无效。');asset.articleCount=selected.filter(a=>a.symbols.includes(symbol)).length;}
-  if((result.eventRisk||Object.values(result.assets).some(a=>a.sentiment!==0))&&result.evidenceIds.length===0)throw new BrokerError('语义NLP没有提供新闻依据。');
+  if((result.eventRisk||[pair.a,pair.b].some(symbol=>result.assets[symbol].sentiment!==0))&&result.evidenceIds.length===0)throw new BrokerError('语义NLP没有提供新闻依据。');
   return {...result,assets:Object.fromEntries([pair.a,pair.b].map(symbol=>[symbol,result.assets[symbol]])),provider:'semantic',model:this.model,limitations:'语言模型可能误读或遗漏新闻；解释只依据展示的摘要，不代表事实核验或收益预测。'};
  }
 }
@@ -71,19 +71,51 @@ export function rankPair(pair,metrics,nlp,articles){
  return {pair,metrics,nlp,articles,eligible,score,reasons};
 }
 export class PairAnalysisService {
- constructor(broker,{provider=process.env.PAIR_NLP_PROVIDER||'keyword',semantic=new SemanticNlp(),now=()=>Date.now()}={}){if(!['keyword','semantic'].includes(provider))throw new BrokerError('PAIR_NLP_PROVIDER必须是keyword或semantic。',400);this.broker=broker;this.provider=provider;this.semantic=semantic;this.now=now;this.cached=null;this.pending=null;}
+ constructor(broker,{provider=process.env.PAIR_NLP_PROVIDER||'keyword',semantic=new SemanticNlp(),now=()=>Date.now(),concurrency=3}={}){
+  if(!['keyword','semantic'].includes(provider))throw new BrokerError('PAIR_NLP_PROVIDER必须是keyword或semantic。',400);
+  this.broker=broker;this.provider=provider;this.semantic=semantic;this.now=now;this.concurrency=Math.max(1,Math.min(3,concurrency));this.cached=null;this.pending=null;this.lastError=null;this.progress={total:PAIRS.length,completed:0};
+ }
+ fresh(){return this.cached&&this.now()-Date.parse(this.cached.generatedAt)<300000;}
  async analyze(){
-  if(this.cached&&this.now()-Date.parse(this.cached.generatedAt)<300000)return this.cached;
+  if(this.fresh())return this.cached;
   if(this.pending)return this.pending;
-  this.pending=this.run();try{return await this.pending;}finally{this.pending=null;}
+  this.lastError=null;this.pending=this.run();
+  try{return await this.pending;}catch(error){this.lastError=error;throw error;}finally{this.pending=null;}
+ }
+ startScan(){
+  if(!this.pending&&!this.fresh()){this.lastError=null;this.analyze().catch(()=>{});}
+  return this.scanStatus();
+ }
+ scanStatus(){
+  if(this.pending)return {status:'running',progress:{...this.progress}};
+  if(this.lastError)return {status:'failed',error:this.lastError.status?this.lastError.message:'扫描失败，请检查数据服务后重试。',progress:{...this.progress}};
+  if(this.cached)return {status:'complete',...this.cached};
+  return {status:'idle',progress:{...this.progress}};
  }
  async run(){
-  const now=this.now(),symbols=[...new Set(PAIRS.flatMap(p=>[p.a,p.b]))];
-  const [daily,news]=await Promise.all([this.broker.dailyBars(symbols),this.broker.news(symbols)]);
-  const articles=news.articles.filter(a=>Date.parse(a.publishedAt)<=now&&now-Date.parse(a.publishedAt)<=7*86400000);
-  const rows=[];
-  for(const pair of PAIRS){const relevant=articles.filter(a=>a.symbols.some(s=>s===pair.a||s===pair.b)),nlp=this.provider==='semantic'?await this.semantic.analyze(relevant,pair):keywordNlp(relevant,pair);rows.push(rankPair(pair,priceMetrics(pair,daily.bars,now),nlp,relevant));}
+  this.progress={total:PAIRS.length,completed:0};
+  const started=this.now(),symbols=[...new Set(PAIRS.flatMap(p=>[p.a,p.b]))];
+  // One shared daily-price snapshot; each pair gets its own news query so popular stocks cannot crowd out others.
+  const daily=await this.broker.dailyBars(symbols),rows=new Array(PAIRS.length);let next=0;
+  const worker=async()=>{
+   while(next<PAIRS.length){
+    const index=next++,pair=PAIRS[index],metrics=priceMetrics(pair,daily.bars,started);let articles=[];
+    try{
+     const news=await this.broker.news([pair.a,pair.b]);
+     articles=news.articles.filter(a=>Date.parse(a.publishedAt)<=started&&started-Date.parse(a.publishedAt)<=7*86400000&&a.symbols.some(s=>s===pair.a||s===pair.b));
+     const nlp=this.provider==='semantic'?await this.semantic.analyze(articles,pair):keywordNlp(articles,pair);
+     rows[index]={...rankPair(pair,metrics,nlp,articles),status:'complete',newsTruncated:Boolean(news.truncated)};
+    }catch(error){
+     const reason=error.status?error.message:'该交易对的新闻或文本分析失败，请稍后重试。';
+     const assets=Object.fromEntries([pair.a,pair.b].map(symbol=>[symbol,{sentiment:0,articleCount:0}]));
+     rows[index]={pair,metrics,nlp:{provider:this.provider,assets,eventRisk:false,evidenceIds:[],reason,limitations:'该组合未完成文本分析；没有使用其他组合或随机数据代替。'},articles,eligible:false,score:null,status:'failed',newsTruncated:false,reasons:[reason,'此组合保留在扫描结果中，不影响其他组合完成分析。']};
+    }finally{this.progress.completed++;}
+   }
+  };
+  await Promise.all(Array.from({length:this.concurrency},worker));
   rows.sort((a,b)=>Number(b.eligible)-Number(a.eligible)||(b.score??-1)-(a.score??-1));
-  const result={generatedAt:new Date(now).toISOString(),expiresAt:new Date(now+15*60000).toISOString(),provider:this.provider,feed:daily.feed,newsWindowDays:7,newsTruncated:news.truncated,rows};this.cached=result;return result;
+  const completed=this.now();
+  const result={startedAt:new Date(started).toISOString(),generatedAt:new Date(completed).toISOString(),expiresAt:new Date(completed+15*60000).toISOString(),provider:this.provider,feed:daily.feed,newsWindowDays:7,newsTruncated:rows.some(row=>row.newsTruncated),summary:{total:rows.length,eligible:rows.filter(r=>r.eligible).length,failed:rows.filter(r=>r.status==='failed').length,unscored:rows.filter(r=>r.score===null).length},rows};
+  this.cached=result;return result;
  }
 }

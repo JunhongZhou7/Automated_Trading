@@ -1,5 +1,5 @@
 import {hydrateStrategies,runCombinations,ingestBars,marketSession} from './strategies.js';
-import {SYMBOLS,INITIAL_PRICES,pairById,hydrateUniverse} from './universe.js';
+import {SYMBOLS,CORE_SYMBOLS,INITIAL_PRICES,pairById,hydrateUniverse,requiredMarketSymbols} from './universe.js';
 export {SYMBOLS} from './universe.js';
 export const DEFAULT_RULES = [
   {threshold:-3,action:'hold',percent:0}, {threshold:-15,action:'buy',percent:10},
@@ -12,6 +12,7 @@ export function createState(seed=42) {
   return hydrateStrategies(hydrateUniverse({version:1, seed, tick:0, cash:100000, initial:100000, prices:{...INITIAL_PRICES}, history:[], curve:[100000],positions:[],trades:[],events:[],nextId:1,pair:null,strategies:{pairs:false,ladder:false},rules:structuredClone(DEFAULT_RULES),settings:{entryZ:2,exitZ:0.4,stopZ:3.5,maxExposure:50}}));
 }
 function random(s) { s.seed=(Math.imul(s.seed,1664525)+1013904223)>>>0; return s.seed/4294967296; }
+function symbolRandom(s,symbol){if(CORE_SYMBOLS.includes(symbol))return random(s);s.extraSeed=(Math.imul(s.extraSeed??1374772829,1664525)+1013904223)>>>0;return s.extraSeed/4294967296;}
 export function mark(s,p) {
   if(p.type==='stock') return s.prices[p.symbol];
   const intrinsic=Math.max(0,p.type==='call'?s.prices[p.symbol]-p.strike:p.strike-s.prices[p.symbol]);
@@ -83,19 +84,19 @@ export function applyRules(s) {
 export function step(s) {
   hydrateStrategies(hydrateUniverse(s));const opens={...s.prices};
   s.tick++;const market=(random(s)-0.5)*0.006;
-  for(const symbol of SYMBOLS) s.prices[symbol]*=Math.exp(market+(random(s)-0.5)*0.008);
+  for(const symbol of SYMBOLS) s.prices[symbol]*=Math.exp(market+(symbolRandom(s,symbol)-0.5)*0.008);
   const minute=(s.tick-1)%390,session='demo-'+Math.floor((s.tick-1)/390),timestamp=new Date(Date.parse('2026-01-05T14:30:00Z')+Math.floor((s.tick-1)/390)*86400000+minute*60000).toISOString();
-  for(const symbol of SYMBOLS){const close=s.prices[symbol],bar={timestamp,session,minute,open:opens[symbol],high:Math.max(opens[symbol],close)*(1+random(s)*.001),low:Math.min(opens[symbol],close)*(1-random(s)*.001),close,volume:Math.floor(50000+random(s)*500000)};s.bars[symbol]??=[];s.bars[symbol].push(bar);s.bars[symbol]=s.bars[symbol].slice(-1000);}
+  for(const symbol of SYMBOLS){const close=s.prices[symbol],bar={timestamp,session,minute,open:opens[symbol],high:Math.max(opens[symbol],close)*(1+symbolRandom(s,symbol)*.001),low:Math.min(opens[symbol],close)*(1-symbolRandom(s,symbol)*.001),close,volume:Math.floor(50000+symbolRandom(s,symbol)*500000)};s.bars[symbol]??=[];s.bars[symbol].push(bar);s.bars[symbol]=s.bars[symbol].slice(-1000);}
   s.barError=null;
   s.history.push({...s.prices});s.history=s.history.slice(-400);
   for(const p of [...s.positions])if(p.type!=='stock'&&p.expiry<=s.tick){const amount=mark(s,p)*p.qty*100;s.cash+=amount;s.positions=s.positions.filter(x=>x.id!==p.id);event(s,p.symbol+' '+p.type+' expired; cash settlement $'+amount.toFixed(2));}
   pairStrategy(s);runCombinations(s,{session,minute,real:false},{equity,exposure,order,closePosition,event});applyRules(s);s.curve.push(equity(s));s.curve=s.curve.slice(-600);return s;
 }
 // Real quotes are sampled once per minute; duplicate polls never accelerate strategy time.
-export function validateMarket(data,now=Date.now()) {
+export function validateMarket(data,now=Date.now(),symbols=SYMBOLS) {
   if(!data.market?.open)throw Error('Market is closed; strategies are paused.');
   const prices={},times=[];
-  for(const symbol of SYMBOLS){const q=data.quotes?.find(q=>q.symbol===symbol),time=Date.parse(q?.timestamp);
+  for(const symbol of symbols){const q=data.quotes?.find(q=>q.symbol===symbol),time=Date.parse(q?.timestamp);
     if(!q||!Number.isFinite(q.price)||q.price<=0||!Number.isFinite(time)||now-time>120000||time-now>5000)throw Error('Missing or stale Alpaca quote. Strategies are paused.');
     prices[symbol]=q.price;times.push(time);
   }
@@ -103,15 +104,15 @@ export function validateMarket(data,now=Date.now()) {
   return {prices,minute:Math.floor(Math.min(...times)/60000)};
 }
 export function stepMarket(s,data,now=Date.now()) {
-  const {prices,minute}=validateMarket(data,now);
+  const required=requiredMarketSymbols(s),{prices,minute}=validateMarket(data,now,required);
   hydrateStrategies(hydrateUniverse(s));ingestBars(s,data.barData||{error:'未取得OHLCV K线'},now);
-  s.prices=prices;
+  Object.assign(s.prices,prices);
   if(minute<= (s.lastMarketMinute??-1))return false;
   // Do not treat a market overnight gap as a continuous rolling intraday window.
   if(s.lastMarketMinute!==undefined&&minute-s.lastMarketMinute>5)s.history=[];
   s.lastMarketMinute=minute;s.tick++;s.history.push({...prices});s.history=s.history.slice(-400);
   const session=marketSession(now),closeTime=Date.parse(data.market.nextClose);
   const flattenMinute=Number.isFinite(closeTime)&&marketSession(closeTime).id===session.id?marketSession(closeTime).minute-5:385;
-  const quoteTime=Math.min(...data.quotes.map(q=>Date.parse(q.timestamp)));
+  const quoteTime=Math.min(...data.quotes.filter(q=>required.includes(q.symbol)).map(q=>Date.parse(q.timestamp)));
   pairStrategy(s);runCombinations(s,{session:session.id,minute:session.minute,flattenMinute,real:true,now,quoteTime},{equity,exposure,order,closePosition,event});applyRules(s);s.curve.push(equity(s));s.curve=s.curve.slice(-600);return true;
 }

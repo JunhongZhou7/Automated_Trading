@@ -29,17 +29,32 @@ The ladder manages independent manual long stock positions. It does not resize p
 
 ## Synthetic prices: what they do and do not establish
 
-Synthetic demo starts from arbitrary constants: AAPL 190, MSFT 420, SPY 550, QQQ 480, PEP 160 and KO 70. It does not download quotes or replay history. With seed 42, each minute applies `price *= exp(commonMarketShock + individualShock)`, where the uniform common log shock is in approximately [-0.003, 0.003] and the individual log shock in [-0.004, 0.004]. High/low ranges and volume are also randomly generated. The synthetic path does not encode real volatility, market microstructure, mean reversion, cointegration, or company fundamentals. It is reproducible for testing mechanics, not evidence of profitability, realistic risk, or suitability of any pair. Adding symbols can change the seeded path between software versions.
+Synthetic demo starts from arbitrary constants (examples): AAPL 190, MSFT 420, SPY 550, QQQ 480, PEP 160 and KO 70. It does not download quotes or replay history. With seed 42, each minute applies `price *= exp(commonMarketShock + individualShock)`, where the uniform common log shock is in approximately [-0.003, 0.003] and the individual log shock in [-0.004, 0.004]. High/low ranges and volume are also randomly generated. The synthetic path does not encode real volatility, market microstructure, mean reversion, cointegration, or company fundamentals. It is reproducible for testing mechanics, not evidence of profitability, realistic risk, or suitability of any pair. Adding symbols can change the seeded path between software versions.
 
 ## Pair research: real prices + news NLP, manual selection
 
-The new **交易对研究 · 价格 + 新闻NLP** panel compares PEP/KO (PepsiCo/Coca-Cola) and AAPL/MSFT. Click **获取真实数据并分析** to fetch real Alpaca adjusted daily bars and the last seven days of news. It works independently of the current chart mode and never uses synthetic prices or fabricated news. Existing Alpaca paper API credentials need access to both historical data and news. Analysis can be run outside market hours; execution still requires fresh market data during trading hours.
+The **交易对研究 · 价格 + 新闻NLP** panel scans every pair in a curated ten-pair research pool. Click **扫描全部10组交易对** to fetch real Alpaca adjusted daily bars and the last seven days of news for all candidates:
+
+| Pair | Companies / research sector |
+| --- | --- |
+| AAPL/MSFT | Apple / Microsoft — large technology |
+| PEP/KO | PepsiCo / Coca-Cola — beverages and consumer products |
+| V/MA | Visa / Mastercard — payment networks |
+| XOM/CVX | Exxon Mobil / Chevron — integrated energy |
+| JPM/BAC | JPMorgan Chase / Bank of America — large banks |
+| WMT/COST | Walmart / Costco — retail |
+| HD/LOW | Home Depot / Lowe’s — home improvement |
+| UPS/FDX | UPS / FedEx — parcel logistics |
+| MCD/YUM | McDonald’s / Yum! Brands — restaurant chains |
+| GOOGL/META | Alphabet / Meta — digital advertising |
+
+This is the full configured candidate pool, not all possible US-listed stock combinations. Candidates can be extended in `universe.js`; membership and industry similarity are not evidence of cointegration. Every pair appears in the results, including failures and missing data. A shared daily-price request covers the 20 candidate stocks; news is queried separately per pair so popular symbols do not crowd out the rest of the pool. At most three pairs are processed concurrently. The UI starts a background scan, polls progress, and reports the number completed, eligible, and failed. A pair-specific news or semantic-model failure does not erase other pairs' rankings. It works independently of the current chart mode and never uses synthetic prices or fabricated news. Existing Alpaca paper API credentials need access to both historical data and news. Analysis can be run outside market hours; execution still requires fresh market data during trading hours.
 
 The service aligns up to 60 completed daily observations and requires at least 40. It fits an OLS log-price relationship on all but the last observation, computes the last residual z-score, daily-return correlation, and each leg's five-session price change. The beta is diagnostic only: execution continues to use equal-dollar legs and the existing rolling minute log-ratio signal. The daily analysis is a candidate screen, not the execution signal. No cointegration or out-of-sample validation has been performed. Similar brands alone do not establish a tradable mean-reverting relationship.
 
 The default text analyzer is **local English keyword NLP**, not a language model. It counts explicit positive/negative earnings phrases on single-company articles and flags possible structural-event terms such as mergers, recalls, and fraud. Shared articles are shown but not assigned directional company sentiment. Negation, ambiguity, broad multi-ticker articles, and incomplete news coverage remain limitations. Missing company coverage is unknown; the pair receives no combined score. A missing event keyword does not establish safety.
 
-The optional semantic analyzer sends at most 20 headlines/summaries per pair to OpenAI. To enable it, edit the existing `.env` (do not overwrite your Alpaca keys):
+The optional semantic analyzer sends at most 20 headlines/summaries per pair to OpenAI (up to ten pair analyses per full scan, so API usage grows with the pool). To enable it, edit the existing `.env` (do not overwrite your Alpaca keys):
 
 ```dotenv
 PAIR_NLP_PROVIDER=semantic
@@ -51,9 +66,9 @@ Restart the server. This uses your own API account and may incur charges. The ke
 
 Research scores combine return correlation (40%), daily spread deviation capped at |z|=2 (30%), and similarity of text sentiment (30%), with a structural-event penalty. Weak correlation (<0.5), nonpositive OLS beta, extreme daily |z| (>3.5), event flags, large sentiment divergence, or missing text coverage prevent the pair from being labeled a priority research candidate. These gates and weights are unvalidated heuristics; a score is not a probability of profit. You can still choose a pair for observation, but the app never automatically selects or trades from this ranking.
 
-Results include source links, publication times, evidence IDs, limitations and data dates. News pagination is capped at 150 recent articles across symbols and labeled if truncated; lexical inputs include summaries up to 2,000 characters and semantic inputs are further capped. Results are cached for five minutes, expire after fifteen minutes, and are not historical point-in-time backtests. The current server has no persistent research storage.
+Results include source links, publication times, evidence IDs, limitations and data dates. News pagination is capped at 150 recent articles per pair and labeled if truncated; lexical inputs include summaries up to 2,000 characters and semantic inputs are further capped. Results are cached for five minutes, expire after fifteen minutes, and are not historical point-in-time backtests. The current server has no persistent research storage.
 
-Use the pair dropdown or a result's selection button to choose a pair manually, then enable pairs trading and start the local research workflow. Selection alone never places an order. Close both legs before changing an active pair. Both synthetic and Alpaca research accounts remember their selections separately. Only one pair can be open at a time. PEP and KO are also available in the watchlist and manual stock order forms. Old browser accounts are migrated without inventing prior PEP/KO history; they need fresh pair samples for warmup.
+Use the pair dropdown or a result's selection button to choose a pair manually, then enable pairs trading and start the local research workflow. Selection alone never places an order. Close both legs before changing an active pair. Both synthetic and Alpaca research accounts remember their selections separately. Only one pair can be open at a time. All candidate stocks are available in manual stock order forms. The watchlist and real-time subscription include the four base watch symbols, selected/open pair legs, held stocks, enabled-combination symbols, and the selected local order symbol. Unrelated research candidates do not need fresh quotes for the current strategies to advance. Switching to a new symbol requests fresh data; missing data blocks orders rather than using its synthetic initialization price. Old browser accounts are migrated without inventing prior PEP/KO history; they need fresh pair samples for warmup.
 
 ## Three entry + position-management combinations
 
@@ -129,3 +144,5 @@ A future IBKR implementation can use Gateway/TWS or Client Portal, normalize its
 ## Validation
 
 `npm test` covers the original engine and mocked Alpaca HTTP contracts, real-data freshness/minute deduplication, broker order/account risk checks, submission idempotency, concurrency, paper-only routing, and same-origin API protection. Tests do not prove a real account connection. End-to-end account and feed validation require valid paper credentials and network access. Full browser rendering was not validated in the cloud because the browser download domain was blocked.
+
+Scan API: `GET /api/pair-analysis?async=1&start=1` starts or reuses a scan. `GET /api/pair-analysis?async=1` returns `running` with completed/total progress, `complete` with all rows, or `failed` for a shared prerequisite failure. `GET /api/pair-analysis` remains a blocking endpoint for scripts. Jobs/results are in-memory and do not survive a server restart. `GET /api/quotes?symbols=AAPL,MSFT,V,MA` and `/api/bars?symbols=...` accept only the configured symbol universe.

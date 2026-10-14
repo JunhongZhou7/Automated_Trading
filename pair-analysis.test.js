@@ -34,7 +34,7 @@ test('rank is a research heuristic; absent text coverage, weak prices and event 
 test('service uses actual provider inputs, removes future/outdated news, caches and deduplicates requests',async()=>{
  let requests=0;const news=['PEP','KO','AAPL','MSFT'].map((s,i)=>article(s,String(i)));news.push({...article('PEP','future'),publishedAt:new Date(now+60000).toISOString()});news.push({...article('KO','old'),publishedAt:new Date(now-8*86400000).toISOString()});
  const broker={dailyBars:async()=>{requests++;return daily;},news:async()=>({articles:news,truncated:true})},service=new PairAnalysisService(broker,{provider:'keyword',now:()=>now});
- const [a,b]=await Promise.all([service.analyze(),service.analyze()]);assert.equal(requests,1);assert.deepEqual(a,b);assert.equal(a.rows.length,2);assert.equal(a.newsTruncated,true);assert.ok(a.rows.every(r=>r.articles.every(a=>!['future','old'].includes(a.id))));await service.analyze();assert.equal(requests,1);
+ const [a,b]=await Promise.all([service.analyze(),service.analyze()]);assert.equal(requests,1);assert.deepEqual(a,b);assert.equal(a.rows.length,10);assert.equal(a.newsTruncated,true);assert.ok(a.rows.every(r=>r.articles.every(a=>!['future','old'].includes(a.id))));await service.analyze();assert.equal(requests,1);
 });
 test('upstream analysis failure returns an error instead of random market/news fallback',async()=>{
  const service=new PairAnalysisService({dailyBars:async()=>{throw Error('No credentials');},news:async()=>({articles:[]})});await assert.rejects(service.analyze(),/No credentials/);assert.equal(service.cached,null);

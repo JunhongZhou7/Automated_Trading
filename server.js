@@ -6,6 +6,7 @@ import {createBroker} from './brokers/index.js';
 import {PaperService} from './broker-service.js';
 import {SYMBOLS} from './engine.js';
 import {PairAnalysisService} from './pair-analysis.js';
+import {WATCH_SYMBOLS} from './universe.js';
 const files=new Map(['index.html','app.js','engine.js','strategies.js','strategies-ui.js','universe.js','pair-research-ui.js','style.css','connection.js'].map(f=>['/'+f,f]));
 const types={html:'text/html',js:'text/javascript',css:'text/css'};
 export function createServer({broker=createBroker(),ordersEnabled=process.env.ALPACA_PAPER_ORDERS==='true',analysis=new PairAnalysisService(broker)}={}){
@@ -13,15 +14,19 @@ export function createServer({broker=createBroker(),ordersEnabled=process.env.AL
  return http.createServer(async(req,res)=>{
   const url=new URL(req.url,'http://localhost');
   const json=(status,data)=>{res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify(data));};
+  const requestedSymbols=()=>{const symbols=[...new Set((url.searchParams.get('symbols')??WATCH_SYMBOLS.join(',')).split(','))];if(!symbols.length||symbols.length>SYMBOLS.length||symbols.some(s=>!SYMBOLS.includes(s))){const error=new Error('Unknown or invalid market symbols.');error.status=400;throw error;}return symbols;};
   try {
    if(url.pathname.startsWith('/api/')){
     // Same-origin checks also protect localhost credentials from cross-site browser requests.
     const origin=req.headers.origin,host=req.headers.host;
     if(req.headers['sec-fetch-site']==='cross-site'||origin&&new URL(origin).host!==host){json(403,{error:'Cross-origin API requests are forbidden.'});return;}
     if(req.method==='GET'&&url.pathname==='/api/config'){json(200,{provider:'alpaca',mode:'paper',configured:broker.configured||false,feed:broker.feed,ordersEnabled,capabilities:broker.capabilities,pairNlp:{provider:analysis.provider,semanticConfigured:Boolean(analysis.semantic?.key)},brokers:[{id:'alpaca',available:true},{id:'ibkr',available:false}]});return;}
-    if(req.method==='GET'&&url.pathname==='/api/quotes'){const [data,market]=await Promise.all([broker.quotes(SYMBOLS),broker.marketClock()]);json(200,{...data,market});return;}
-    if(req.method==='GET'&&url.pathname==='/api/bars'){json(200,await broker.bars(SYMBOLS));return;}
-    if(req.method==='GET'&&url.pathname==='/api/pair-analysis'){json(200,await analysis.analyze());return;}
+    if(req.method==='GET'&&url.pathname==='/api/quotes'){const symbols=requestedSymbols();const [data,market]=await Promise.all([broker.quotes(symbols),broker.marketClock()]);json(200,{...data,market});return;}
+    if(req.method==='GET'&&url.pathname==='/api/bars'){json(200,await broker.bars(requestedSymbols()));return;}
+    if(req.method==='GET'&&url.pathname==='/api/pair-analysis'){
+     if(url.searchParams.get('async')==='1'){const result=url.searchParams.get('start')==='1'?analysis.startScan():analysis.scanStatus();json(result.status==='running'?202:200,result);}
+     else json(200,await analysis.analyze());return;
+    }
     if(req.method==='GET'&&url.pathname==='/api/account'){json(200,await broker.snapshot());return;}
     if(req.method==='POST'&&(url.pathname==='/api/orders'||url.pathname==='/api/orders/cancel')){
      if(!ordersEnabled){json(403,{error:'Set ALPACA_PAPER_ORDERS=true on the server to enable broker paper orders.'});return;}
